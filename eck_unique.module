@@ -1,0 +1,139 @@
+<?php
+
+/**
+ * Implements hook_menu().
+ */
+function eck_unique_menu() {
+
+  $items['admin/config/content/eck_unique'] = array(
+    'title' => 'ECK Unique settings',
+    'description' => 'Configure entities defined by ECK to have unique titles',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('eck_unique_config_form'),
+    'access arguments' => array('administer modules'),
+  );
+
+  return $items;
+}
+
+/**
+ * Generates a form array to edit ECK Unique configuration.
+ */
+function eck_unique_config_form($form, $form_state){
+
+  $form['data'] = array(
+    '#tree' => TRUE,
+  );
+
+  $data = (array) variable_get('eck_unique_data', array());
+  foreach (entity_get_info() as $entity_type => $entity_info) {
+    if (!isset($entity_info['bundles']) || ! $entity_info['bundles']) {
+      continue;
+    }
+    $form['data'][$entity_type] = array(
+      '#type' => 'fieldset',
+      '#title' => $entity_info['label'],
+    );
+    $group = &$form['data'][$entity_type];
+    foreach ($entity_info['bundles'] as $bundle => $bundle_info){
+      $group[$bundle] = array(
+        '#tree' => TRUE,
+        '#type' => 'fieldset',
+        '#title' => $bundle_info['label'],
+      );
+      $group[$bundle]['unique_title'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Unique title'),
+        '#default_value' => @$data[$entity_type][$bundle]['unique_title'],
+      );
+      $group[$bundle]['scope'] = array(
+        '#type' => 'select',
+        '#options' => array(
+          0 => 'Bundle',
+          1 => 'Entity Type',
+        ),
+        '#default_value' => @$data[$entity_type][$bundle]['scope'],
+      );
+    }
+  }
+
+  $form['actions']['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save'),
+  );
+  return $form;
+}
+
+/**
+ * Saves data from submited form array to edit ECK Unique configuration.
+ */
+function eck_unique_config_form_submit($form, $form_state){
+  variable_set('eck_unique_data', $form_state['values']['data']);
+}
+
+/**
+ * Invoke hook_form_alter().
+ */
+function eck_unique_form_alter(&$form, &$form_state, $form_id) {
+  //dpm($form);
+
+  if (isset($form['entity']) && isset($form['#entity_type'])) {
+    $form['#validate'][] = 'eck_unique_form_validate_callback';
+  }
+}
+
+/**
+ * Callback function used to validate unique titles.
+ */
+function eck_unique_form_validate_callback($form, $form_state){
+  $settings = (array) variable_get('eck_unique_data', array());
+
+  $entity_type = $form['#entity_type'];
+  $entity = $form['entity']['#value'];
+  if (!isset($settings[$entity_type][$entity->type])) return;
+  $set = $settings[$entity_type][$entity->type];
+
+  if ($set['unique_title']) {
+    //dpm('Check for unique title...');
+    $entity->title = $form_state['values']['title'];
+    if (!eck_unique_is_entity_title_unique($entity_type, $entity, $set)) {
+      form_set_error('title', t('Such record already exists'));
+    }
+  }
+}
+
+/**
+ * Checks if provided entity has unique title in database.
+ */
+function eck_unique_is_entity_title_unique($entity_type, $entity, $options = array()) {
+  if (!isset($options['scope'])) $options['scope'] == 0;
+  $w = entity_metadata_wrapper($entity_type, $entity);
+  $id = $w->getIdentifier();
+  $query = new EntityFieldQuery();
+
+  $query->entityCondition('entity_type', $entity_type);
+  if ($options['scope'] == 0) {
+    $query->entityCondition('bundle', $entity->type);
+  }
+  $query->propertyCondition('title', $entity->title)
+    ->range(0, 2)
+    ->addMetaData('account', user_load(1)); // Run the query as user 1.
+
+  $result = $query->execute();
+  $rez = FALSE;
+  if (isset($result[$entity_type])) {
+    $ids = array_keys($result[$entity_type]);
+    $rez = TRUE;
+    foreach ($ids as $eid) {
+      if ($eid != $id) {
+        return FALSE;
+      }
+    }
+  // If nothing found in databse
+  }
+  else {
+    return TRUE;
+  }
+  return $rez;
+}
+
